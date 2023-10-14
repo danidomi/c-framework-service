@@ -201,7 +201,7 @@ int recv_line(int sockfd, unsigned char *dest_buffer) {
 }
 
 // Default Implement this methods
-Response *handle_api(Request *request) {
+__attribute__((weak)) Response *handle_api(Request *request) {
     Response *response = malloc(sizeof(Response));
     response->status_code = "200 OK";
     response->headers[0] = "Content-Type: application/json; charset=utf-8";
@@ -209,6 +209,7 @@ Response *handle_api(Request *request) {
     response->data = "world";
     return response;
 }
-char *get_path() {
+
+__attribute__((weak)) char *get_path() {
     return "/hello";
 }
