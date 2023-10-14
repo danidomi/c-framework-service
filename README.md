@@ -32,17 +32,18 @@ The Microservices Framework offers the following features:
 
 ### Prerequisites
 
-Before using the Microservices Framework, ensure you have the following pre-requeriments:
+Before using the Microservices Framework, ensure you have the following pre-requirements:
 
 - C Compiler (gcc)
 - Standard C Library (libc)
+- [cdeps](https://github.com/danidomi/cdeps)
 
 ### Installation
 
-Clone the repository and compile the code to get started:
+You can easily set up the Microservices Framework by using the provided dependency manager. Simply run the following command:
 
 ```shell
-cdeps install github.com/danidomi/c-framwework@latest
+cdeps install github.com/danidomi/c-framwework-service@latest
 ```
 
 ## Usage
