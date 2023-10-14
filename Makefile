@@ -1,17 +1,17 @@
-.PHONY: release
+.PHONY: all clean release
 
 # Define output and bin directories
-SRC_DIR := .
+SRC_DIR := src
 OUTPUT_DIR := output
 BIN_DIR := bin
 RELEASE_DIR := release/c-framework-service
 
 # List of source files
-SRCS := Server.c request/Request.c response/Response.c logger/Logger.c error/Error.c
-HDRS := $(wildcard *.h) $(wildcard request/*.h) $(wildcard response/*.h) $(wildcard logger/*.h) $(wildcard error/*.h)
+SRCS := $(wildcard $(SRC_DIR)/*.c) $(wildcard $(SRC_DIR)/**/*.c)
+HDRS := $(wildcard $(SRC_DIR)/*.h) $(wildcard $(SRC_DIR)/**/*.h)
 
 # Create object files for each source
-OBJS := $(patsubst %.c,$(OUTPUT_DIR)/%.o,$(SRCS))
+OBJS := $(patsubst $(SRC_DIR)/%.c,$(OUTPUT_DIR)/%.o,$(SRCS))
 
 # Default target
 all: $(BIN_DIR)/Server
@@ -28,9 +28,9 @@ $(BIN_DIR)/Server: $(OUTPUT_DIR) $(BIN_DIR) $(OBJS)
 	gcc -o $@ $(OBJS)
 
 # Compile source files into object files
-$(OUTPUT_DIR)/%.o: %.c
+$(OUTPUT_DIR)/%.o: $(SRC_DIR)/%.c
 	mkdir -p $(dir $@)
-	gcc -c $< -o $@
+	gcc -c $< -o $@ -w
 
 # Clean rule
 clean:
