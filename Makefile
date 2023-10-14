@@ -4,7 +4,7 @@
 SRC_DIR := .
 OUTPUT_DIR := output
 BIN_DIR := bin
-RELEASE_DIR := release
+RELEASE_DIR := release/c-framework-service
 
 # List of source files
 SRCS := Server.c request/Request.c response/Response.c logger/Logger.c error/Error.c
@@ -25,7 +25,7 @@ $(BIN_DIR):
 
 # Link the executable
 $(BIN_DIR)/Server: $(OUTPUT_DIR) $(BIN_DIR) $(OBJS)
-	gcc -o $@ $(OBJS) -lmysqlclient
+	gcc -o $@ $(OBJS)
 
 # Compile source files into object files
 $(OUTPUT_DIR)/%.o: %.c
