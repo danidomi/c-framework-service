@@ -1,4 +1,4 @@
-#include "Error.h"
+#include "error.h"
 
 Error * new(char * message) {
     Error * error;

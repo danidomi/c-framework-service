@@ -14,7 +14,7 @@ HDRS := $(wildcard $(SRC_DIR)/*.h) $(wildcard $(SRC_DIR)/**/*.h)
 OBJS := $(patsubst $(SRC_DIR)/%.c,$(OUTPUT_DIR)/%.o,$(SRCS))
 
 # Default target
-all: $(BIN_DIR)/Server
+all: $(BIN_DIR)/server
 
 # Ensure output and bin directories are created
 $(OUTPUT_DIR):
@@ -24,13 +24,16 @@ $(BIN_DIR):
 	mkdir -p $(BIN_DIR)
 
 # Link the executable
-$(BIN_DIR)/Server: $(OUTPUT_DIR) $(BIN_DIR) $(OBJS)
-	gcc -o $@ $(OBJS)
+$(BIN_DIR)/server: $(OUTPUT_DIR) $(BIN_DIR) $(OBJS) $(OUTPUT_DIR)/main.o
+	gcc -o $@ $(OBJS) $(OUTPUT_DIR)/main.o
 
 # Compile source files into object files
 $(OUTPUT_DIR)/%.o: $(SRC_DIR)/%.c
 	mkdir -p $(dir $@)
 	gcc -c $< -o $@ -w
+
+$(OUTPUT_DIR)/main.o: main.c
+	gcc -c main.c -o $(OUTPUT_DIR)/main.o
 
 # Clean rule
 clean:

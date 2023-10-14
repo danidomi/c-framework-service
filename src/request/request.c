@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "Request.h"
+#include "request.h"
 
 Request *parse_request(char *req) {
     if (req == NULL) {

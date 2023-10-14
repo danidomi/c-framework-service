@@ -1,60 +1,41 @@
-#include "Server.h"
+#include "server.h"
 
-int main(void) {
-    int sockfd, *new_sockfd, yes = 1;
-    struct sockaddr_in host_addr, client_addr;      //My address information
-    socklen_t sin_size;
+/* This function accepts a socket FD and a ptr to the null terminated
+ * string to send.  The function will make sure all the bytes of the
+ * string are sent.  Returns 1 on success and 0 on failure.
+ */
+int send_string(int sockfd, unsigned char *buffer) {
+    int sent_bytes, bytes_to_send;
+    bytes_to_send = strlen(buffer);
+    while (bytes_to_send > 0) {
+        sent_bytes = send(sockfd, buffer, bytes_to_send, 0);
+        if (sent_bytes == -1)
+            return 0; // return 0 on send error
+        bytes_to_send -= sent_bytes;
+        buffer += sent_bytes;
+    }
+    return 1; // return 1 on success
+}
 
-    log_message(INFO,"Accepting web requests on port %d\n", PORT);
+int recv_line(int sockfd, unsigned char *dest_buffer) {
+    unsigned char *ptr;
+    int eol_matched = 0;
 
-    if ((sockfd = socket(PF_INET, SOCK_STREAM, 0)) == -1)
-        fatal("in socket");
-    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1)
-        fatal("setting socket option SO_REUSEADDR\n");
-
-    host_addr.sin_family = AF_INET;     //Host byte order
-    host_addr.sin_port = htons(PORT);       //Short, newtork byte order
-    host_addr.sin_addr.s_addr = INADDR_ANY; //Automatically fill with my IP
-    memset(&(host_addr.sin_zero), '\0', 8); //Zero the rest of the struct
-
-    if (bind(sockfd, (struct sockaddr *) &host_addr, sizeof(struct sockaddr)) == -1)
-        fatal("binding to socket");
-
-    if (listen(sockfd, 20) == -1)
-        fatal("listening on socket");
-
-    while (1) {  //accept loop
-        sin_size = sizeof(struct sockaddr_in);
-        new_sockfd = (int *) malloc(sizeof(int)); // Allocate memory for the new socket descriptor
-        if (new_sockfd == NULL)
-            fatal("malloc");
-
-        *new_sockfd = accept(sockfd, (struct sockaddr *) &client_addr, &sin_size);
-        if (*new_sockfd == -1) {
-            free(new_sockfd);
-            fatal("accepting connection");
+    ptr = dest_buffer;
+    while (recv(sockfd, ptr, 1, 0) == 1) { // read a single byte
+        if (*ptr == EOL[eol_matched]) { // does this byte match terminator
+            eol_matched++;
+            if (eol_matched == EOL_SIZE) { // if all bytes match terminator,
+                *(ptr + 1 - EOL_SIZE) = '\0'; // terminate the string
+                return strlen(dest_buffer); // return bytes recevied
+            }
+        } else {
+            eol_matched = 0;
         }
-
-        // Create a new thread and pass sockfd and client_addr_ptr as arguments
-        pthread_t thread;
-
-        struct ThreadArgs *args = (struct ThreadArgs *) malloc(sizeof(struct ThreadArgs));
-        if (args == NULL) {
-            free(new_sockfd);
-            fatal("malloc");
-        }
-        args->sockfd = *new_sockfd;
-        args->client_addr_ptr = &client_addr;
-        if (pthread_create(&thread, NULL, (void *(*)(void *)) handle_connection, args) != 0) {
-            free(new_sockfd);
-            fatal("pthread_create");
-        }
-
-        // Detach the thread to allow it to clean up automatically
-        pthread_detach(thread);
-    }//Close while
-    return 0;
-}//Close main
+        ptr++; // increment the pointer to the next byter;
+    }
+    return 0; // didn't find the end of line characters
+}
 
 /***************************************************
 This funtion handles the connection on the passed socket
@@ -161,43 +142,6 @@ int get_file_size(int fd) {
 void fatal(char *a) {
     log_message(ERROR, "Error: %s\n", a);
     exit(-1);
-}
-
-/* This function accepts a socket FD and a ptr to the null terminated
- * string to send.  The function will make sure all the bytes of the
- * string are sent.  Returns 1 on success and 0 on failure.
- */
-int send_string(int sockfd, unsigned char *buffer) {
-    int sent_bytes, bytes_to_send;
-    bytes_to_send = strlen(buffer);
-    while (bytes_to_send > 0) {
-        sent_bytes = send(sockfd, buffer, bytes_to_send, 0);
-        if (sent_bytes == -1)
-            return 0; // return 0 on send error
-        bytes_to_send -= sent_bytes;
-        buffer += sent_bytes;
-    }
-    return 1; // return 1 on success
-}
-
-int recv_line(int sockfd, unsigned char *dest_buffer) {
-    unsigned char *ptr;
-    int eol_matched = 0;
-
-    ptr = dest_buffer;
-    while (recv(sockfd, ptr, 1, 0) == 1) { // read a single byte
-        if (*ptr == EOL[eol_matched]) { // does this byte match terminator
-            eol_matched++;
-            if (eol_matched == EOL_SIZE) { // if all bytes match terminator,
-                *(ptr + 1 - EOL_SIZE) = '\0'; // terminate the string
-                return strlen(dest_buffer); // return bytes recevied
-            }
-        } else {
-            eol_matched = 0;
-        }
-        ptr++; // increment the pointer to the next byter;
-    }
-    return 0; // didn't find the end of line characters
 }
 
 // Default Implement this methods

@@ -1,6 +1,6 @@
 #pragma once
 
-typedef struct Error {
+typedef struct {
     char * message;
 } Error;
 

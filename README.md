@@ -8,10 +8,12 @@
 - [Getting Started](#getting-started)
     - [Prerequisites](#prerequisites)
     - [Installation](#installation)
+    - [Configuration](#configuration)
 - [Usage](#usage)
     - [Logging](#logging)
     - [Request](#request)
     - [Response](#response)
+- [Testing](#testing)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -46,6 +48,17 @@ You can easily set up the Microservices Framework by using the provided dependen
 cdeps install github.com/danidomi/c-framwework-service@latest
 ```
 
+
+### Configuration
+
+- If you want to change the default PORT, you can do so in the configuration. By default, the PORT is set to 8080.
+
+```c
+#ifndef PORT
+#define PORT 8080 // Port users will be connecting to
+#endif
+```
+
 ## Usage
 
 ### Logging
@@ -53,7 +66,7 @@ cdeps install github.com/danidomi/c-framwework-service@latest
 Use the built-in logging functionality to log messages with various log levels. Example:
 
 ```c
-#include <c-framework-service/logger/Logger.h>
+#include <c-framework-service/logger/logger.h>
 
 int main() {
     log_message(DEBUG, "Debug message");
@@ -68,7 +81,7 @@ int main() {
 Parse and work with incoming HTTP requests using the Request structure and functions. Example:
 
 ```c
-#include <c-framework-service/request/Request.h>
+#include <c-framework-service/request/request.h>
 
 int main() {
     char req[] = "GET /api/resource?key=value HTTP/1.1\r\nHost: example.com\r\n\r\n";
@@ -86,7 +99,7 @@ int main() {
 Generate and customize HTTP responses with the Response structure. Example:
 
 ```c
-#include <c-framework-service/response/Response.h>
+#include <c-framework-service/response/response.h>
 
 int main() {
     Response response;
@@ -98,6 +111,21 @@ int main() {
     // ...
     return 0;
 }
+```
+
+## Testing
+
+You can use the `curl` command to test the "hello" endpoint and ensure that your c-framework-service is working correctly.
+
+Make sure your Microservices Framework is up and running. If you haven't started it yet, run the following command to start it on the default port (8080):
+
+```shell
+./run.sh
+```
+
+Open a browser or a new terminal window make a GET request to the "hello" endpoint.
+```shell
+curl http://localhost:8080/hello
 ```
 
 ## Contributing

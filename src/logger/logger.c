@@ -1,7 +1,7 @@
-#include "Logger.h"
+#include "logger.h"
 
 // Function to get the current timestamp
-void getCurrentTime(char *timestamp, size_t size) {
+void get_current_time(char *timestamp, size_t size) {
     time_t rawTime;
     struct tm *timeInfo;
 
@@ -17,7 +17,7 @@ void log_message(LogLevel level, const char *format, ...) {
     va_start(args, format);
 
     char timestamp[20];
-    getCurrentTime(timestamp, sizeof(timestamp));
+    get_current_time(timestamp, sizeof(timestamp));
     FILE *logFile;
     if (strcmp(LOG_FILE, "stderr") == 0){
         logFile = stderr;
@@ -51,6 +51,7 @@ void log_message(LogLevel level, const char *format, ...) {
 
     vfprintf(stderr, format, args);
     fprintf(stderr, "\n");
+
     // Ensure that the message is immediately printed to stderr
     fflush(stderr);
     va_end(args);

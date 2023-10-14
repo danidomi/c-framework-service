@@ -1,7 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-
 // Define log levels
 typedef enum {
     GET,
@@ -12,12 +11,12 @@ typedef enum {
     OPTIONS
 } Method;
 
-typedef struct KeyValuePair {
+typedef struct {
     char *key;
     char *value;
 } KeyValuePair;
 
-typedef struct Request {
+typedef struct {
     Method method;
     char *path;
     KeyValuePair *queryParams;
