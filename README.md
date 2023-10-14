@@ -1,4 +1,5 @@
 # c-framework-service
+[![GitHub release](https://img.shields.io/github/release/danidomi/c-framework-service.svg)](https://github.com/danidomi/cdeps/releases)
 
 ## Table of Contents
 
