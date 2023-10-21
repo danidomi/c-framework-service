@@ -1,21 +1,14 @@
 .PHONY: all clean release
 
+# Determine the OS
+OS := $(shell uname)
+ARCH := $(shell uname -m)
+
 # Define output and bin directories
 SRC_DIR := src
 OUTPUT_DIR := output
 BIN_DIR := bin
-RELEASE_DIR := release/c-framework-service
-# Determine the OS
-UNAME := $(shell uname)
-
-# Set the platform-specific release folder
-ifeq ($(UNAME), Linux)
-	RELEASE_DIR := $(RELEASE_DIR)/Linux
-else ifeq ($(UNAME), Darwin) # macOS
-	RELEASE_DIR := $(RELEASE_DIR)/macOS
-else ifeq ($(UNAME), Windows_NT)
-	RELEASE_DIR := $(RELEASE_DIR)/Windows
-endif
+RELEASE_DIR := release/$(OS)_$(ARCH)
 
 # List of source files
 SRCS := $(wildcard $(SRC_DIR)/*.c) $(wildcard $(SRC_DIR)/**/*.c)
@@ -25,7 +18,6 @@ HDRS := $(wildcard $(SRC_DIR)/*.h) $(wildcard $(SRC_DIR)/**/*.h)
 OBJS := $(patsubst $(SRC_DIR)/%.c,$(OUTPUT_DIR)/%.o,$(SRCS))
 
 CC = cc
-CFLAGS = -Wall -O2
 
 # Default target
 all: $(BIN_DIR)/server
@@ -51,13 +43,10 @@ $(OUTPUT_DIR)/main.o: main.c
 
 # Clean rule
 clean:
-	rm -rf $(OUTPUT_DIR) $(BIN_DIR) $(RELEASE_DIR)
-
-test:
-	echo $(RELEASE_DIR)
+	rm -rf $(OUTPUT_DIR) $(BIN_DIR)
 
 # Create a release target
-release: $(HDRS)
+release: $(HDRS) all
 	rm -rf $(RELEASE_DIR)
 	mkdir -p $(RELEASE_DIR)
 	ld -r -o $(RELEASE_DIR)/c-framework-service.o $(shell find $(OUTPUT_DIR) -name '*.o')
@@ -67,4 +56,4 @@ release: $(HDRS)
 		mkdir -p $$(dirname $$dest_file); \
 		cp "$$file" "$$dest_file"; \
 	done
-	(cd release && zip -r c-framework-service.zip *)
+	(cd release && zip -r $(OS)_$(ARCH).zip $(OS)_$(ARCH)/*)
