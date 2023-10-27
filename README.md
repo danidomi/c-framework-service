@@ -14,6 +14,8 @@
     - [Request](#request)
     - [Response](#response)
 - [Testing](#testing)
+    - [Locally](#locally)
+    - [Docker](#docker)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -117,15 +119,30 @@ int main() {
 
 You can use the `curl` command to test the "hello" endpoint and ensure that your c-framework-service is working correctly.
 
+Open a browser or a new terminal window make a GET request to the "hello" endpoint.
+```shell
+curl http://localhost:8080/hello
+```
+
+### Locally
+
 Make sure your Microservices Framework is up and running. If you haven't started it yet, run the following command to start it on the default port (8080):
 
 ```shell
 ./run.sh
 ```
 
-Open a browser or a new terminal window make a GET request to the "hello" endpoint.
+### Docker
+
+Build the image
 ```shell
-curl http://localhost:8080/hello
+docker build -t c-framework-service .
+```
+
+and run it.
+
+```shell
+docker run -p 8080:8080 c-framework-service
 ```
 
 ## Contributing
