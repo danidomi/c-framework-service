@@ -1,7 +1,8 @@
 #pragma once
 
 typedef struct {
-    char * message;
+    char *message;
 } Error;
 
-Error * new(char * message);
+Error *error_new(const char *message);
+void error_free(Error *e);

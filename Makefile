@@ -10,9 +10,9 @@ OUTPUT_DIR := output
 BIN_DIR := bin
 RELEASE_DIR := release/$(OS)_$(ARCH)
 
-# List of source files
-SRCS := $(wildcard $(SRC_DIR)/*.c) $(wildcard $(SRC_DIR)/**/*.c)
-HDRS := $(wildcard $(SRC_DIR)/*.h) $(wildcard $(SRC_DIR)/**/*.h)
+# List of source files (recursive)
+SRCS := $(shell find $(SRC_DIR) -name '*.c')
+HDRS := $(shell find $(SRC_DIR) -name '*.h')
 
 # Create object files for each source
 OBJS := $(patsubst $(SRC_DIR)/%.c,$(OUTPUT_DIR)/%.o,$(SRCS))
@@ -45,11 +45,11 @@ $(OUTPUT_DIR)/main.o: main.c
 clean:
 	rm -rf $(OUTPUT_DIR) $(BIN_DIR)
 
-# Create a release target
-release: $(HDRS) all
+# Create a release target — bundles only library objects (not main.o)
+release: $(HDRS) $(OBJS)
 	rm -rf $(RELEASE_DIR)
 	mkdir -p $(RELEASE_DIR)
-	ld -r -o $(RELEASE_DIR)/c-framework-service.o $(shell find $(OUTPUT_DIR) -name '*.o')
+	ld -r -o $(RELEASE_DIR)/c-framework-service.o $(OBJS)
 	find $(SRC_DIR) -type f -name '*.h' | while read -r file; do \
 		rel_path=$$(echo "$$file" | sed "s|^$(SRC_DIR)/||"); \
 		dest_file="$(RELEASE_DIR)/$$rel_path"; \

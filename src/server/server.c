@@ -1,159 +1,191 @@
 #include "server.h"
 
-/* This function accepts a socket FD and a ptr to the null terminated
- * string to send.  The function will make sure all the bytes of the
- * string are sent.  Returns 1 on success and 0 on failure.
- */
-int send_string(int sockfd, unsigned char *buffer) {
-    int sent_bytes, bytes_to_send;
-    bytes_to_send = strlen(buffer);
-    while (bytes_to_send > 0) {
-        sent_bytes = send(sockfd, buffer, bytes_to_send, 0);
-        if (sent_bytes == -1)
-            return 0; // return 0 on send error
-        bytes_to_send -= sent_bytes;
-        buffer += sent_bytes;
+#include <arpa/inet.h>
+#include <errno.h>
+#include <netinet/in.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include "../logger/logger.h"
+
+struct ThreadArgs {
+    int sockfd;
+    struct sockaddr_in client_addr;
+};
+
+static int send_all(int sockfd, const void *buf, size_t len) {
+    const char *p = buf;
+    while (len > 0) {
+        ssize_t n = send(sockfd, p, len, 0);
+        if (n <= 0) return -1;
+        p += n;
+        len -= (size_t)n;
     }
-    return 1; // return 1 on success
+    return 0;
 }
 
-int recv_line(int sockfd, unsigned char *dest_buffer) {
-    unsigned char *ptr;
-    int eol_matched = 0;
-
-    ptr = dest_buffer;
-    while (recv(sockfd, ptr, 1, 0) == 1) { // read a single byte
-        if (*ptr == EOL[eol_matched]) { // does this byte match terminator
-            eol_matched++;
-            if (eol_matched == EOL_SIZE) { // if all bytes match terminator,
-                *(ptr + 1 - EOL_SIZE) = '\0'; // terminate the string
-                return strlen(dest_buffer); // return bytes recevied
-            }
-        } else {
-            eol_matched = 0;
-        }
-        ptr++; // increment the pointer to the next byter;
+static int send_response(int sockfd, Response *r) {
+    size_t status_len = strlen(r->status_code);
+    size_t total = 9 + status_len + 2;
+    for (size_t i = 0; i < r->headersCount; i++) {
+        total += strlen(r->headers[i]) + 2;
     }
-    return 0; // didn't find the end of line characters
+    total += 2;
+    total += r->data_length;
+
+    char *buf = malloc(total + 1);
+    if (!buf) return -1;
+
+    char *p = buf;
+    int n = sprintf(p, "HTTP/1.1 %s\r\n", r->status_code);
+    p += n;
+
+    for (size_t i = 0; i < r->headersCount; i++) {
+        n = sprintf(p, "%s\r\n", r->headers[i]);
+        p += n;
+    }
+
+    *p++ = '\r';
+    *p++ = '\n';
+
+    if (r->data && r->data_length > 0) {
+        memcpy(p, r->data, r->data_length);
+        p += r->data_length;
+    }
+
+    int rc = send_all(sockfd, buf, (size_t)(p - buf));
+    free(buf);
+    return rc;
 }
 
-/***************************************************
-This funtion handles the connection on the passed socket
-from the passed client address. The connection is processed
-as a web request, and this function replies over the
-connected socket. Finally, the passed socket is closed
-at the end of the function.
-****************************************************/
-void handle_connection(void *arg) {
-    struct ThreadArgs *args = (struct ThreadArgs *) arg;
+static void send_404(int sockfd) {
+    static const char body[] =
+        "<html><head><title>404 Not Found</title></head>"
+        "<body><h1>404 Not Found</h1></body></html>";
+    char head[256];
+    int n = snprintf(head, sizeof(head),
+                     "HTTP/1.1 404 Not Found\r\n"
+                     "Content-Type: text/html; charset=utf-8\r\n"
+                     "Content-Length: %zu\r\n"
+                     "Connection: close\r\n\r\n",
+                     sizeof(body) - 1);
+    send_all(sockfd, head, (size_t)n);
+    send_all(sockfd, body, sizeof(body) - 1);
+}
+
+static void *handle_connection(void *arg) {
+    struct ThreadArgs *args = (struct ThreadArgs *)arg;
     int sockfd = args->sockfd;
-    struct sockaddr_in *client_addr_ptr = args->client_addr_ptr;
-    unsigned char *ptr, *resource;
-    Request *request;
-    char *requestPlain;
-    int fd, length;
+    struct sockaddr_in client = args->client_addr;
+    free(args);
 
-    resource = malloc(50);
-    requestPlain = malloc(4000);
-    length = recv_line(sockfd, requestPlain);
-    log_message(DEBUG,"%s", requestPlain);
-    request = parse_request(requestPlain);
-    if (request != NULL) {
-        log_message(DEBUG,"Method: %d", request->method);
-        log_message(DEBUG,"Path: %s", request->path);
-        log_message(DEBUG,"Query Parameters:");
-        for (size_t i = 0; i < request->queryParamsCount; i++) {
-            log_message(DEBUG,"\tKey: %s, Value: %s\n", request->queryParams[i].key, request->queryParams[i].value);
-        }
-    } else {
-        log_message(WARNING, "Failed to parse request.");
-    }
-    log_message(DEBUG, "Got request from %s:%d \"%s\"\n", inet_ntoa(client_addr_ptr->sin_addr),
-           ntohs(client_addr_ptr->sin_port), requestPlain);
-    ptr = strstr(requestPlain, "HTTP/");     //Search for valid looking request
-    if (ptr == NULL) {       //The this isnt a valid HTTP
-        log_message(WARNING,"NOT HTTP!\n");
-    } else if (strcmp(request->path, "/favicon.ico") == 0) {
-        handle_404(sockfd);
+    Request *request = request_recv(sockfd);
+    if (!request) {
+        log_message(WARNING, "Failed to read/parse request from %s:%d",
+                    inet_ntoa(client.sin_addr), ntohs(client.sin_port));
+        send_404(sockfd);
         shutdown(sockfd, SHUT_RDWR);
-        return;
+        close(sockfd);
+        return NULL;
+    }
+
+    log_message(DEBUG, "%s %s from %s:%d",
+                method_name(request->method), request->path,
+                inet_ntoa(client.sin_addr), ntohs(client.sin_port));
+
+    Response *response = route_dispatch(request);
+    if (!response) {
+        send_404(sockfd);
     } else {
-        log_message(DEBUG,"request->path %s %s\n", request->path, get_path());
-        if (strcmp(request->path, get_path()) == 0) {
-            log_message(DEBUG, "Handling %s", request->path);
-            Response *response = handle_api(request);
-            if (response == NULL) {
-                log_message(WARNING, "Response is NULL");
-                handle_404(sockfd);
-                shutdown(sockfd, SHUT_RDWR);
-                return;
-            }
-            char *http = malloc(10 + strlen(response->status_code) * sizeof(char));
-            char *header = malloc(strlen(response->headers[0]) * response->headersCount * sizeof(char));
-            char data[1000];
-            //char *data = malloc(strlen(response->data) * sizeof(char)); // TODO would be better to do something like this!
-            sprintf(http, "HTTP/1.0 %s\r\n", response->status_code);
-            if (response->headersCount > 0) {
-                for (int i = 0; i < response->headersCount; i++) {
-                    log_message(DEBUG,"%d\n", i);
-                    if (i != (response->headersCount - 1)) {
-                        sprintf(header, "%s\r\n", response->headers[i]);
-                    } else {
-                        sprintf(header, "%s\r\n\r\n", response->headers[i]);
-                    }
+        if (response->data_length > 0) {
+            int has_cl = 0;
+            for (size_t i = 0; i < response->headersCount; i++) {
+                if (strncasecmp(response->headers[i], "Content-Length:", 15) == 0) {
+                    has_cl = 1;
+                    break;
                 }
             }
-            log_message(DEBUG,"data: %s\n", response->data);
-            sprintf(data, "%s\r\n", response->data);
-            send_string(sockfd, http);
-            send_string(sockfd, header);
-            send_string(sockfd, data);
-            free(http);
-            free(header);
-            //free(data);
-        } else {
-            handle_404(sockfd);
-        } //Close else printf 200 block
-    }//End if block for valid HTTP
-    shutdown(sockfd, SHUT_RDWR);    //close socket ever so gingerly
-}//Close void handle_connection
+            if (!has_cl) {
+                char cl[64];
+                snprintf(cl, sizeof(cl), "Content-Length: %zu", response->data_length);
+                response_add_header(response, cl);
+            }
+        }
+        if (send_response(sockfd, response) != 0) {
+            log_message(WARNING, "Failed to send response");
+        }
+        response_free(response);
+    }
 
-
-void handle_404(int sockfd) {
-    send_string(sockfd, "HTTP/1.0 404 Not Found\r\n");
-    send_string(sockfd, "Server: Tiny webserver \r\n\r\n");
-    send_string(sockfd, "<html><head><title>404 not found</title></head>");
-    send_string(sockfd, "<body><h1>URL not found</h1></body></html>\r\n");
+    request_free(request);
+    shutdown(sockfd, SHUT_RDWR);
+    close(sockfd);
+    return NULL;
 }
 
-/*******************************************************
-This function accepts an open file descriptor and returns
-the size of the associated file. returns -1 on failure
-********************************************************/
-int get_file_size(int fd) {
-    struct stat stat_struct;
-
-    if (fstat(fd, &stat_struct) == -1)
-        return -1;
-    return (int) stat_struct.st_size;
-}// close get_file_size
-
-// Definition of function fatal().
-void fatal(char *a) {
-    log_message(ERROR, "Error: %s\n", a);
-    exit(-1);
+void fatal(const char *msg) {
+    log_message(ERROR, "fatal: %s (errno=%d: %s)", msg, errno, strerror(errno));
+    exit(1);
 }
 
-// Default Implement this methods
-__attribute__((weak)) Response *handle_api(Request *request) {
-    Response *response = malloc(sizeof(Response));
-    response->status_code = "200 OK";
-    response->headers[0] = "Content-Type: application/json; charset=utf-8";
-    response->headersCount = 1;
-    response->data = "world";
-    return response;
-}
+int server_run(int port) {
+    int sockfd;
+    int yes = 1;
+    struct sockaddr_in host_addr;
 
-__attribute__((weak)) char *get_path() {
-    return "/hello";
+    if ((sockfd = socket(PF_INET, SOCK_STREAM, 0)) == -1) {
+        fatal("socket");
+    }
+    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1) {
+        fatal("setsockopt SO_REUSEADDR");
+    }
+
+    memset(&host_addr, 0, sizeof(host_addr));
+    host_addr.sin_family = AF_INET;
+    host_addr.sin_port = htons((uint16_t)port);
+    host_addr.sin_addr.s_addr = INADDR_ANY;
+
+    if (bind(sockfd, (struct sockaddr *)&host_addr, sizeof(host_addr)) == -1) {
+        fatal("bind");
+    }
+    if (listen(sockfd, 64) == -1) {
+        fatal("listen");
+    }
+
+    log_message(INFO, "Accepting web requests on port %d", port);
+
+    for (;;) {
+        struct sockaddr_in client_addr;
+        socklen_t sin_size = sizeof(client_addr);
+        int new_sockfd = accept(sockfd, (struct sockaddr *)&client_addr, &sin_size);
+        if (new_sockfd == -1) {
+            log_message(WARNING, "accept failed: %s", strerror(errno));
+            continue;
+        }
+
+        struct ThreadArgs *args = malloc(sizeof(*args));
+        if (!args) {
+            close(new_sockfd);
+            log_message(ERROR, "out of memory accepting connection");
+            continue;
+        }
+        args->sockfd = new_sockfd;
+        args->client_addr = client_addr;
+
+        pthread_t thread;
+        if (pthread_create(&thread, NULL, handle_connection, args) != 0) {
+            close(new_sockfd);
+            free(args);
+            log_message(ERROR, "pthread_create failed: %s", strerror(errno));
+            continue;
+        }
+        pthread_detach(thread);
+    }
+
+    close(sockfd);
+    return 0;
 }

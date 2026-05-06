@@ -1,58 +1,51 @@
 #include "logger.h"
 
-// Function to get the current timestamp
-void get_current_time(char *timestamp, size_t size) {
+#include <stdlib.h>
+
+static void get_current_time(char *timestamp, size_t size) {
     time_t rawTime;
-    struct tm *timeInfo;
+    struct tm timeInfo;
 
     time(&rawTime);
-    timeInfo = localtime(&rawTime);
-
-    strftime(timestamp, size, "%Y-%m-%d %H:%M:%S", timeInfo);
+    localtime_r(&rawTime, &timeInfo);
+    strftime(timestamp, size, "%Y-%m-%d %H:%M:%S", &timeInfo);
 }
 
-// Function to log a message
+static const char *level_label(LogLevel level) {
+    switch (level) {
+        case DEBUG:   return "DEBUG";
+        case INFO:    return "INFO";
+        case WARNING: return "WARNING";
+        case ERROR:   return "ERROR";
+        default:      return "UNKNOWN";
+    }
+}
+
 void log_message(LogLevel level, const char *format, ...) {
     va_list args;
     va_start(args, format);
 
     char timestamp[20];
     get_current_time(timestamp, sizeof(timestamp));
-    FILE *logFile;
-    if (strcmp(LOG_FILE, "stderr") == 0){
-        logFile = stderr;
-    } else{
-        logFile = fopen(LOG_FILE, "a"); // Open or create the log file in append mode
+
+    int close_after = 0;
+    FILE *out;
+    if (strcmp(LOG_FILE, "stderr") == 0) {
+        out = stderr;
+    } else {
+        out = fopen(LOG_FILE, "a");
+        if (!out) {
+            out = stderr;
+        } else {
+            close_after = 1;
+        }
     }
 
-    if (logFile == NULL) {
-        perror("Error opening log file");
-        return;
-    }
+    fprintf(out, "[%s] [%s] ", timestamp, level_label(level));
+    vfprintf(out, format, args);
+    fputc('\n', out);
+    fflush(out);
 
-    fprintf(logFile, "[%s] ", timestamp);
-
-    switch (level) {
-        case DEBUG:
-            fprintf(logFile, "[DEBUG] ");
-            break;
-        case INFO:
-            fprintf(logFile, "[INFO] ");
-            break;
-        case WARNING:
-            fprintf(logFile, "[WARNING] ");
-            break;
-        case ERROR:
-            fprintf(logFile, "[ERROR] ");
-            break;
-        default:
-            printf("UNKNOWN %s\n", format);
-    }
-
-    vfprintf(stderr, format, args);
-    fprintf(stderr, "\n");
-
-    // Ensure that the message is immediately printed to stderr
-    fflush(stderr);
+    if (close_after) fclose(out);
     va_end(args);
 }
