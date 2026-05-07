@@ -7,10 +7,10 @@
 #include <strings.h>
 #include <sys/socket.h>
 
-#define MAX_REQUEST_HEAD 8192
 #define MAX_BODY_SIZE (8 * 1024 * 1024)
 #define MAX_QUERY_PARAMS 64
 #define MAX_HEADERS_IN 64
+#define CHUNK_LINE_MAX 256
 
 static Method method_from_string(const char *s) {
     if (strcmp(s, "GET") == 0) return GET;
@@ -45,6 +45,38 @@ static char *trim(char *s) {
     return s;
 }
 
+static int hex_val(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
+    if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
+    return -1;
+}
+
+static char *url_decode(const char *s) {
+    size_t n = strlen(s);
+    char *out = malloc(n + 1);
+    if (!out) return NULL;
+    size_t j = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (s[i] == '+') {
+            out[j++] = ' ';
+        } else if (s[i] == '%' && i + 2 < n) {
+            int hi = hex_val(s[i + 1]);
+            int lo = hex_val(s[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                out[j++] = (char)((hi << 4) | lo);
+                i += 2;
+            } else {
+                out[j++] = s[i];
+            }
+        } else {
+            out[j++] = s[i];
+        }
+    }
+    out[j] = '\0';
+    return out;
+}
+
 static int parse_query_string(Request *request, char *queryStart) {
     request->queryParams = calloc(MAX_QUERY_PARAMS, sizeof(KeyValuePair));
     if (!request->queryParams) return -1;
@@ -53,14 +85,25 @@ static int parse_query_string(Request *request, char *queryStart) {
     char *tok = strtok_r(queryStart, "&", &saveptr);
     while (tok && request->queryParamsCount < MAX_QUERY_PARAMS) {
         char *eq = strchr(tok, '=');
+        const char *raw_key;
+        const char *raw_val;
         if (eq) {
             *eq = '\0';
-            request->queryParams[request->queryParamsCount].key = strdup(tok);
-            request->queryParams[request->queryParamsCount].value = strdup(eq + 1);
+            raw_key = tok;
+            raw_val = eq + 1;
         } else {
-            request->queryParams[request->queryParamsCount].key = strdup(tok);
-            request->queryParams[request->queryParamsCount].value = strdup("");
+            raw_key = tok;
+            raw_val = "";
         }
+        char *k = url_decode(raw_key);
+        char *v = url_decode(raw_val);
+        if (!k || !v) {
+            free(k);
+            free(v);
+            return -1;
+        }
+        request->queryParams[request->queryParamsCount].key = k;
+        request->queryParams[request->queryParamsCount].value = v;
         request->queryParamsCount++;
         tok = strtok_r(NULL, "&", &saveptr);
     }
@@ -73,6 +116,7 @@ Request *parse_request(const char *raw) {
     Request *request = calloc(1, sizeof(Request));
     if (!request) return NULL;
     request->method = METHOD_UNKNOWN;
+    request->http_minor = 1;
 
     char *copy = strdup(raw);
     if (!copy) {
@@ -80,25 +124,46 @@ Request *parse_request(const char *raw) {
         return NULL;
     }
 
-    char *line_save = NULL;
-    char *line = strtok_r(copy, "\r\n", &line_save);
-    if (!line) goto fail;
+    char *p = copy;
+    char *line_end = strstr(p, "\r\n");
+    if (!line_end) goto fail;
+    *line_end = '\0';
+    char *request_line = p;
+    p = line_end + 2;
 
-    char *tok_save = NULL;
-    char *method_str = strtok_r(line, " ", &tok_save);
-    char *path_str = strtok_r(NULL, " ", &tok_save);
-    if (!method_str || !path_str) goto fail;
+    char *m_end = strchr(request_line, ' ');
+    if (!m_end) goto fail;
+    *m_end = '\0';
+    char *method_str = request_line;
+    char *path_start = m_end + 1;
+
+    char *p_end = strchr(path_start, ' ');
+    char *version_str = NULL;
+    if (p_end) {
+        *p_end = '\0';
+        version_str = p_end + 1;
+    }
 
     request->method = method_from_string(method_str);
     if (request->method == METHOD_UNKNOWN) goto fail;
 
-    char *query = strchr(path_str, '?');
+    if (version_str) {
+        if (strcmp(version_str, "HTTP/1.1") == 0) {
+            request->http_minor = 1;
+        } else if (strcmp(version_str, "HTTP/1.0") == 0) {
+            request->http_minor = 0;
+        } else {
+            goto fail;
+        }
+    }
+
+    char *query = strchr(path_start, '?');
     if (query) {
         *query = '\0';
         query++;
     }
 
-    request->path = strdup(path_str);
+    request->path = strdup(path_start);
     if (!request->path) goto fail;
 
     if (query && *query) {
@@ -108,16 +173,25 @@ Request *parse_request(const char *raw) {
     request->headers = calloc(MAX_HEADERS_IN, sizeof(KeyValuePair));
     if (!request->headers) goto fail;
 
-    while ((line = strtok_r(NULL, "\r\n", &line_save)) != NULL) {
-        if (request->headersCount >= MAX_HEADERS_IN) break;
-        char *colon = strchr(line, ':');
-        if (!colon) continue;
-        *colon = '\0';
-        char *value = trim(colon + 1);
-        char *key = trim(line);
-        request->headers[request->headersCount].key = strdup(key);
-        request->headers[request->headersCount].value = strdup(value);
-        request->headersCount++;
+    while (*p) {
+        line_end = strstr(p, "\r\n");
+        if (!line_end) break;
+        if (line_end == p) break;
+        *line_end = '\0';
+        if (request->headersCount >= MAX_HEADERS_IN) {
+            p = line_end + 2;
+            continue;
+        }
+        char *colon = strchr(p, ':');
+        if (colon) {
+            *colon = '\0';
+            char *value = trim(colon + 1);
+            char *key = trim(p);
+            request->headers[request->headersCount].key = strdup(key);
+            request->headers[request->headersCount].value = strdup(value);
+            request->headersCount++;
+        }
+        p = line_end + 2;
     }
 
     free(copy);
@@ -129,79 +203,166 @@ fail:
     return NULL;
 }
 
-static ssize_t recv_until_double_crlf(int sockfd, char *buf, size_t cap) {
-    size_t total = 0;
-    while (total < cap - 1) {
-        ssize_t n = recv(sockfd, buf + total, cap - 1 - total, 0);
-        if (n <= 0) return n < 0 ? -1 : (ssize_t)total;
-        total += (size_t)n;
-        buf[total] = '\0';
-        if (strstr(buf, "\r\n\r\n")) return (ssize_t)total;
+void conn_state_init(ConnState *c, int sockfd) {
+    c->sockfd = sockfd;
+    c->pos = 0;
+    c->end = 0;
+}
+
+static int conn_compact(ConnState *c) {
+    if (c->pos > 0) {
+        memmove(c->buf, c->buf + c->pos, c->end - c->pos);
+        c->end -= c->pos;
+        c->pos = 0;
+    }
+    return c->end < sizeof(c->buf) ? 0 : -1;
+}
+
+static ssize_t fill_head(ConnState *c) {
+    while (1) {
+        if (c->end >= c->pos + 4) {
+            for (size_t i = c->pos; i + 3 < c->end; i++) {
+                if (c->buf[i] == '\r' && c->buf[i + 1] == '\n' &&
+                    c->buf[i + 2] == '\r' && c->buf[i + 3] == '\n') {
+                    return (ssize_t)(i + 4 - c->pos);
+                }
+            }
+        }
+        if (c->end == sizeof(c->buf)) {
+            if (conn_compact(c) != 0) return -1;
+        }
+        ssize_t n = recv(c->sockfd, c->buf + c->end, sizeof(c->buf) - c->end, 0);
+        if (n <= 0) return n < 0 ? -1 : 0;
+        c->end += (size_t)n;
+    }
+}
+
+static int read_exact(ConnState *c, void *dst, size_t n) {
+    char *d = (char *)dst;
+    size_t copied = 0;
+    if (c->end > c->pos) {
+        size_t avail = c->end - c->pos;
+        size_t take = avail < n ? avail : n;
+        memcpy(d, c->buf + c->pos, take);
+        c->pos += take;
+        copied = take;
+    }
+    while (copied < n) {
+        ssize_t r = recv(c->sockfd, d + copied, n - copied, 0);
+        if (r <= 0) return -1;
+        copied += (size_t)r;
+    }
+    return 0;
+}
+
+static int read_line(ConnState *c, char *out, size_t cap) {
+    size_t n = 0;
+    while (n + 1 < cap) {
+        char ch;
+        if (read_exact(c, &ch, 1) != 0) return -1;
+        out[n++] = ch;
+        if (n >= 2 && out[n - 2] == '\r' && out[n - 1] == '\n') {
+            out[n - 2] = '\0';
+            return 0;
+        }
     }
     return -1;
 }
 
-Request *request_recv(int sockfd) {
-    char *headbuf = malloc(MAX_REQUEST_HEAD);
-    if (!headbuf) return NULL;
+static int read_chunked_body(ConnState *c, Request *req) {
+    char line[CHUNK_LINE_MAX];
+    char *body = NULL;
+    size_t total = 0;
+    size_t cap = 0;
 
-    ssize_t total = recv_until_double_crlf(sockfd, headbuf, MAX_REQUEST_HEAD);
-    if (total <= 0) {
-        free(headbuf);
-        return NULL;
+    for (;;) {
+        if (read_line(c, line, sizeof(line)) != 0) goto fail;
+        char *semi = strchr(line, ';');
+        if (semi) *semi = '\0';
+        char *endp = NULL;
+        unsigned long size = strtoul(line, &endp, 16);
+        if (endp == line) goto fail;
+
+        if (size == 0) {
+            for (;;) {
+                if (read_line(c, line, sizeof(line)) != 0) goto fail;
+                if (line[0] == '\0') break;
+            }
+            break;
+        }
+        if (total + size > MAX_BODY_SIZE) goto fail;
+
+        size_t need = total + size + 1;
+        if (need > cap) {
+            size_t new_cap = cap == 0 ? 4096 : cap;
+            while (new_cap < need) new_cap *= 2;
+            char *nb = realloc(body, new_cap);
+            if (!nb) goto fail;
+            body = nb;
+            cap = new_cap;
+        }
+        if (read_exact(c, body + total, size) != 0) goto fail;
+        total += size;
+
+        char crlf[2];
+        if (read_exact(c, crlf, 2) != 0 || crlf[0] != '\r' || crlf[1] != '\n') goto fail;
     }
 
-    char *body_start = strstr(headbuf, "\r\n\r\n");
-    if (!body_start) {
-        free(headbuf);
-        return NULL;
+    if (!body) {
+        body = malloc(1);
+        if (!body) return -1;
     }
-    *body_start = '\0';
-    body_start += 4;
-    size_t already_in_buffer = (size_t)total - (size_t)(body_start - headbuf);
+    body[total] = '\0';
+    req->body = body;
+    req->bodyLength = total;
+    return 0;
 
-    Request *req = parse_request(headbuf);
-    if (!req) {
-        free(headbuf);
-        return NULL;
+fail:
+    free(body);
+    return -1;
+}
+
+Request *request_recv(ConnState *c) {
+    ssize_t head_len = fill_head(c);
+    if (head_len <= 0) return NULL;
+
+    char saved = c->buf[c->pos + head_len];
+    c->buf[c->pos + head_len] = '\0';
+    Request *req = parse_request(c->buf + c->pos);
+    c->buf[c->pos + head_len] = saved;
+    if (!req) return NULL;
+    c->pos += (size_t)head_len;
+
+    const char *te = get_header_value(req, "Transfer-Encoding");
+    if (te && strcasecmp(te, "chunked") == 0) {
+        if (read_chunked_body(c, req) != 0) {
+            request_free(req);
+            return NULL;
+        }
+        return req;
     }
 
     const char *cl = get_header_value(req, "Content-Length");
     if (cl) {
         long long len = strtoll(cl, NULL, 10);
         if (len < 0 || (size_t)len > MAX_BODY_SIZE) {
-            free(headbuf);
             request_free(req);
             return NULL;
         }
         size_t body_len = (size_t)len;
         req->body = malloc(body_len + 1);
         if (!req->body) {
-            free(headbuf);
             request_free(req);
             return NULL;
         }
-
-        size_t copied = already_in_buffer < body_len ? already_in_buffer : body_len;
-        if (copied > 0) memcpy(req->body, body_start, copied);
-
-        size_t remaining = body_len - copied;
-        size_t off = copied;
-        while (remaining > 0) {
-            ssize_t n = recv(sockfd, req->body + off, remaining, 0);
-            if (n <= 0) {
-                free(headbuf);
-                request_free(req);
-                return NULL;
-            }
-            off += (size_t)n;
-            remaining -= (size_t)n;
+        if (body_len > 0 && read_exact(c, req->body, body_len) != 0) {
+            request_free(req);
+            return NULL;
         }
         req->body[body_len] = '\0';
         req->bodyLength = body_len;
     }
 
-    free(headbuf);
     return req;
 }
 

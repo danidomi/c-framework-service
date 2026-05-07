@@ -2,6 +2,8 @@
 
 #include <stddef.h>
 
+#define HTTP_HEAD_BUF 8192
+
 typedef enum {
     METHOD_UNKNOWN = -1,
     GET = 0,
@@ -21,6 +23,7 @@ typedef struct {
 typedef struct {
     Method method;
     char *path;
+    int http_minor;
     KeyValuePair *queryParams;
     size_t queryParamsCount;
     KeyValuePair *headers;
@@ -29,8 +32,17 @@ typedef struct {
     size_t bodyLength;
 } Request;
 
+typedef struct {
+    int sockfd;
+    char buf[HTTP_HEAD_BUF];
+    size_t pos;
+    size_t end;
+} ConnState;
+
+void conn_state_init(ConnState *c, int sockfd);
+
 Request *parse_request(const char *raw);
-Request *request_recv(int sockfd);
+Request *request_recv(ConnState *c);
 void request_free(Request *req);
 
 const char *get_query_param_value(const Request *request, const char *key);
