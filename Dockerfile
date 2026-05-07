@@ -1,18 +1,23 @@
-FROM ubuntu
+# syntax=docker/dockerfile:1
 
-RUN apt update && apt install -y make zip curl gcc wget
+FROM alpine:3.20 AS builder
 
-# Create the /app directory
-RUN mkdir -p /app
+RUN apk add --no-cache build-base make
 
 WORKDIR /app
-
-# Continue with your build process
 COPY . .
 
-# Compile the binaries
 RUN make clean all
 
+
+FROM alpine:3.20 AS runtime
+
+RUN addgroup -S app && adduser -S app -G app
+
+WORKDIR /app
+COPY --from=builder /app/bin/server /app/bin/server
+
+USER app
 EXPOSE 8080
 
 CMD ["/app/bin/server"]
