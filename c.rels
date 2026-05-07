@@ -1,3 +1,5 @@
 Linux x86_64
 Linux aarch64
 Linux armv7l
+Darwin arm64
+Darwin x86_64
