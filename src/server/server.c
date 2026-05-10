@@ -14,6 +14,7 @@
 #include <unistd.h>
 
 #include "../logger/logger.h"
+#include "../metrics/metrics.h"
 
 #define MAX_CONNECTIONS 256
 #define SOCKET_TIMEOUT_SECS 30
@@ -56,7 +57,7 @@ static int send_all(int sockfd, const void *buf, size_t len) {
     return 0;
 }
 
-static int send_response(int sockfd, Response *r) {
+int send_response(int sockfd, Response *r) {
     size_t status_len = strlen(r->status_code);
     size_t total = 9 + status_len + 2;
     for (size_t i = 0; i < r->headersCount; i++) {
@@ -105,7 +106,7 @@ static void send_404(int sockfd) {
     send_all(sockfd, body, sizeof(body) - 1);
 }
 
-static int response_has_header(Response *r, const char *name) {
+int response_has_header(Response *r, const char *name) {
     size_t name_len = strlen(name);
     for (size_t i = 0; i < r->headersCount; i++) {
         if (strncasecmp(r->headers[i], name, name_len) == 0 &&
@@ -149,10 +150,13 @@ static void *handle_connection(void *arg) {
         if (shutting_down) close_conn = 1;
 
         Response *response = route_dispatch(request);
+        int status_code;
         if (!response) {
             send_404(sockfd);
+            status_code = 404;
             close_conn = 1;
         } else {
+            status_code = atoi(response->status_code);
             if (response->data_length > 0 && !response_has_header(response, "Content-Length")) {
                 char cl[64];
                 snprintf(cl, sizeof(cl), "Content-Length: %zu", response->data_length);
@@ -169,6 +173,7 @@ static void *handle_connection(void *arg) {
             }
             response_free(response);
         }
+        metrics_record_request(status_code);
 
         request_free(request);
     }
@@ -188,6 +193,8 @@ int server_run(int port) {
     int sockfd;
     int yes = 1;
     struct sockaddr_in host_addr;
+
+    metrics_init();
 
     signal(SIGPIPE, SIG_IGN);
 
