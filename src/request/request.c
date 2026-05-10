@@ -366,6 +366,22 @@ Request *request_recv(ConnState *c) {
     return req;
 }
 
+int request_add_query_param(Request *req, const char *key, const char *value) {
+    if (!req || !key || !value) return -1;
+    if (!req->queryParams) {
+        req->queryParams = calloc(MAX_QUERY_PARAMS, sizeof(KeyValuePair));
+        if (!req->queryParams) return -1;
+    }
+    if (req->queryParamsCount >= MAX_QUERY_PARAMS) return -1;
+    char *k = strdup(key);
+    char *v = strdup(value);
+    if (!k || !v) { free(k); free(v); return -1; }
+    req->queryParams[req->queryParamsCount].key = k;
+    req->queryParams[req->queryParamsCount].value = v;
+    req->queryParamsCount++;
+    return 0;
+}
+
 void request_free(Request *req) {
     if (!req) return;
     free(req->path);

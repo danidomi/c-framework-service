@@ -48,3 +48,9 @@ void request_free(Request *req);
 const char *get_query_param_value(const Request *request, const char *key);
 const char *get_header_value(const Request *request, const char *name);
 const char *method_name(Method m);
+
+/* Append a key/value pair to the request's queryParams. The pair is
+ * duplicated; caller retains ownership of its strings. Returns 0 on
+ * success, -1 on failure (allocation, capacity, or null args).
+ * Used by the router to expose matched path-param segments to handlers. */
+int request_add_query_param(Request *req, const char *key, const char *value);
