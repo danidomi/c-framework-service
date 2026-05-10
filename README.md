@@ -1,153 +1,216 @@
 # c-framework-service
+
 [![GitHub release](https://img.shields.io/github/release/danidomi/c-framework-service.svg)](https://github.com/danidomi/c-framework-service/releases)
 
-## Table of Contents
+A small C framework for building HTTP microservices. Single binary, no
+external runtime dependencies (other than libc + pthreads), distributed as a
+prebuilt object file via [cdeps](https://github.com/danidomi/cdeps) so apps
+just link against it.
 
-- [Introduction](#introduction)
-- [Features](#features)
-- [Getting Started](#getting-started)
-    - [Prerequisites](#prerequisites)
-    - [Installation](#installation)
-    - [Configuration](#configuration)
-- [Usage](#usage)
-    - [Logging](#logging)
-    - [Request](#request)
-    - [Response](#response)
-- [Testing](#testing)
-    - [Locally](#locally)
-    - [Docker](#docker)
-- [Contributing](#contributing)
-- [License](#license)
+## What's in the box
 
-## Introduction
+- **HTTP/1.1 server** with keep-alive, chunked-body decoding, per-socket
+  timeouts, connection cap (256), graceful SIGINT/SIGTERM drain.
+- **Router** with method + path matching and `:param` path parameters
+  (`/cats/:id` → handler reads `id` via `get_query_param_value`).
+- **Request** parsing: query string, headers, body. URL decoding (`%XX`, `+`).
+- **Response** building with named HTTP status macros (`HTTP_OK`,
+  `HTTP_CREATED`, `HTTP_NOT_FOUND`, `HTTP_INTERNAL_SERVER_ERROR`, etc.).
+- **Logger** (`DEBUG`, `INFO`, `WARNING`, `ERROR`).
+- **Health & metrics**: `/healthz`, `/readyz`, `/metrics` (Prometheus text
+  format), runnable on a dedicated admin port so they don't share traffic
+  with the public API.
+- **Custom metrics API**: register counters and gauges from app code, exposed
+  on the same `/metrics` endpoint. Atomic, safe to mutate from worker threads.
+- **Error** type with `error_new` / `error_free`.
+- **Database config** loader for property files.
 
-The c-framework-service is a C-based framework designed to simplify the development of microservices by providing various features. 
-It is suitable for building scalable and efficient microservices that handle web requests and responses.
+## Install
 
-## Features
+Add to your project's `c.deps`:
 
-The Microservices Framework offers the following features:
+```
+github.com/danidomi/c-framework-service v0.4.0
+```
 
-- **Logging**: Easily log messages with different log levels (DEBUG, INFO, WARNING, ERROR).
-- **Request Handling**: Parse incoming HTTP requests and extract essential information.
-- **Response Generation**: Create and customize HTTP responses.
-
-## Getting Started
-
-### Prerequisites
-
-Before using the Microservices Framework, ensure you have the following pre-requirements:
-
-- C Compiler (gcc)
-- Standard C Library (libc)
-- [cdeps](https://github.com/danidomi/cdeps)
-
-### Installation
-
-You can easily set up the Microservices Framework by using the provided dependency manager. Simply run the following command:
+Then:
 
 ```shell
-cdeps install github.com/danidomi/c-framwework-service@latest
+cdeps install
 ```
 
+This downloads the platform-matched zip into `deps/c-framework-service/<OS>_<ARCH>/`
+(e.g. `Linux_x86_64`). Most projects flatten that one level so the include
+path resolves at the natural location:
 
-### Configuration
-
-- If you want to change the default PORT, you can do so in the configuration. By default, the PORT is set to 8080.
-
-```c
-#ifndef PORT
-#define PORT 8080 // Port users will be connecting to
-#endif
+```shell
+for d in deps/*/Linux_* deps/*/Darwin_*; do
+    [ -d "$d" ] || continue
+    mv "$d"/* "$(dirname "$d")/"
+    rmdir "$d"
+done
 ```
 
-## Usage
+After flattening you get `deps/c-framework-service/c-framework-service.o` and
+`deps/c-framework-service/{request,response,router,...}/*.h`. Supported
+platforms: Linux x86_64/i386/aarch64/armv7l and Darwin arm64/x86_64.
 
-### Logging
-
-Use the built-in logging functionality to log messages with various log levels. Example:
+## Quick start
 
 ```c
+#include <c-framework-service/health/health.h>
 #include <c-framework-service/logger/logger.h>
+#include <c-framework-service/router/router.h>
+#include <c-framework-service/server/server.h>
 
-int main() {
-    log_message(DEBUG, "Debug message");
-    log_message(INFO, "This is an informational message");
-    log_message(ERROR, "An error occurred!");
-    return 0;
+static Response *handle_hello(Request *req) {
+    (void)req;
+    Response *r = response_new(HTTP_OK);
+    response_add_header(r, "Content-Type: application/json; charset=utf-8");
+    response_set_body(r, "{\"hello\":\"world\"}");
+    return r;
+}
+
+int main(void) {
+    log_message(INFO, "starting");
+
+    route_register(GET, "/hello", handle_hello);
+    health_start_admin_server(0);   /* 0 = $ADMIN_PORT or 9090 */
+
+    return server_run(port_from_env(PORT));
 }
 ```
 
-### Request
+Build:
 
-Parse and work with incoming HTTP requests using the Request structure and functions. Example:
+```shell
+cc -Ideps -o myservice main.c deps/c-framework-service/c-framework-service.o -lpthread
+PORT=8080 ./myservice
+```
+
+## Routing with path params
 
 ```c
-#include <c-framework-service/request/request.h>
-
-int main() {
-    char req[] = "GET /api/resource?key=value HTTP/1.1\r\nHost: example.com\r\n\r\n";
-    Request *request = parse_request(req);
-    char *value = get_query_param_value(request, "key");
-    
-    // Use the request and extracted query parameters
-    // ...
-    free(request);
-    return 0;
-}
+route_register(GET,    "/cats",     handle_list);
+route_register(POST,   "/cats",     handle_create);
+route_register(GET,    "/cats/:id", handle_get);
+route_register(PUT,    "/cats/:id", handle_update);
+route_register(DELETE, "/cats/:id", handle_delete);
 ```
 
-### Response
-Generate and customize HTTP responses with the Response structure. Example:
+Inside a handler, the matched path-param is bound onto the request's query
+params, so the same getter retrieves both:
 
 ```c
-#include <c-framework-service/response/response.h>
+const char *id = get_query_param_value(req, "id");
+```
 
-int main() {
-    Response response;
-    response.status_code = "200 OK";
-    response.headers[0] = "Content-Type: application/json";
-    response.data = "{'message': 'Hello, World!'}";
+## Response status macros
 
-    // Send the response
-    // ...
-    return 0;
+```c
+response_new(HTTP_OK);                  /* 200 OK */
+response_new(HTTP_CREATED);             /* 201 Created */
+response_new(HTTP_NO_CONTENT);          /* 204 No Content */
+response_new(HTTP_BAD_REQUEST);         /* 400 Bad Request */
+response_new(HTTP_NOT_FOUND);           /* 404 Not Found */
+response_new(HTTP_INTERNAL_SERVER_ERROR);
+/* ...also: HTTP_UNAUTHORIZED, HTTP_FORBIDDEN, HTTP_METHOD_NOT_ALLOWED,
+   HTTP_CONFLICT, HTTP_UNPROCESSABLE_ENTITY, HTTP_TOO_MANY_REQUESTS,
+   HTTP_BAD_GATEWAY, HTTP_SERVICE_UNAVAILABLE, etc. — see response.h */
+```
+
+## Health and metrics
+
+Two ways to expose `/healthz`, `/readyz`, `/metrics`:
+
+```c
+/* On a dedicated admin port (recommended for production —
+   keeps /metrics off your public traffic). */
+health_start_admin_server(0);    /* 0 -> $ADMIN_PORT, default 9090 */
+health_start_admin_server(9090); /* explicit port */
+
+/* Or on the main server's port (simpler, public): */
+health_register_default_routes();
+```
+
+Optional readiness check:
+
+```c
+static int my_readiness(void) {
+    return database_is_connected() ? 1 : 0;
 }
+
+health_set_readiness_check(my_readiness);
 ```
 
-## Testing
+## Custom metrics
 
-You can use the `curl` command to test the "hello" endpoint and ensure that your c-framework-service is working correctly.
+```c
+#include <c-framework-service/metrics/metrics.h>
 
-Open a browser or a new terminal window make a GET request to the "hello" endpoint.
+static MetricCounter *requests_handled;
+static MetricGauge   *queue_depth;
+
+void app_init(void) {
+    requests_handled = metric_counter_register(
+        "requests_handled_total", "Requests handled since startup");
+    queue_depth = metric_gauge_register(
+        "queue_depth", "Items waiting in queue");
+}
+
+/* Anywhere */
+metric_counter_inc(requests_handled);
+metric_counter_add(requests_handled, 5);
+metric_gauge_set(queue_depth, 12.0);
+metric_gauge_inc(queue_depth);
+metric_gauge_dec(queue_depth);
+```
+
+Returns `NULL` when metrics are disabled — the inc/set helpers no-op on
+`NULL`, so app code doesn't have to special-case it. Limits: 32 counters and
+32 gauges per process.
+
+## Environment variables
+
+| Variable          | Default | Effect                                                               |
+|-------------------|---------|----------------------------------------------------------------------|
+| `PORT`            | 8080    | Main HTTP listener (the value passed to `port_from_env(PORT)`)       |
+| `ADMIN_PORT`      | 9090    | Used by `health_start_admin_server(0)` when no explicit port given   |
+| `METRICS_ENABLED` | true    | Set `0`/`false`/`no`/`off` to disable collection and `/metrics`      |
+
+## Built-in metrics
+
+Always emitted (when enabled) on `/metrics`:
+
+```
+# HELP service_http_requests_total Total HTTP requests handled
+# TYPE service_http_requests_total counter
+service_http_requests_total 42
+
+# HELP service_http_requests_by_status HTTP requests handled by status code
+# TYPE service_http_requests_by_status counter
+service_http_requests_by_status{status="200"} 38
+service_http_requests_by_status{status="404"} 4
+
+# HELP service_uptime_seconds Process uptime in seconds
+# TYPE service_uptime_seconds gauge
+service_uptime_seconds 1234
+```
+
+Followed by every counter / gauge the app registered via the metrics API.
+
+## Building from source
+
 ```shell
-curl http://localhost:8080/hello
+make all                          # builds bin/server (the included demo)
+make release                      # builds release/<OS>_<ARCH>/{c-framework-service.o, headers}
+                                  # and a corresponding .zip ready to upload to GitHub
 ```
 
-### Locally
-
-Make sure your Microservices Framework is up and running. If you haven't started it yet, run the following command to start it on the default port (8080):
-
-```shell
-./run.sh
-```
-
-### Docker
-
-Build the image
-```shell
-docker build -t c-framework-service .
-```
-
-and run it.
-
-```shell
-docker run -p 8080:8080 c-framework-service
-```
-
-## Contributing
-We welcome contributions from the community. Please see our Contribution Guidelines for details on how to contribute to this project.
+To produce all release zips listed in `c.rels`, use
+[crels](https://github.com/danidomi/crels) — it iterates the file and shells
+out to Docker for each Linux target.
 
 ## License
-This project is licensed under the MIT License. You are free to use and modify it as you see fit.
 
+MIT.
